@@ -1,12 +1,11 @@
 <template>
   <div class="code-topology-container">
-    <!-- 工具栏 -->
     <div class="toolbar">
       <div class="toolbar-left">
         <input
           type="text"
           v-model="directoryPath"
-          placeholder="输入要分析的文件夹路径..."
+          placeholder="输入要分析的文件夹路径（例如：g:\Trea_Coding_\code_topology_diagram\test_project）"
           class="path-input"
         />
         <button
@@ -48,9 +47,7 @@
       </div>
     </div>
 
-    <!-- 主内容区 -->
     <div class="main-content">
-      <!-- 图例 -->
       <div class="legend-panel">
         <h3 class="legend-title">图例</h3>
         <div class="legend-items">
@@ -68,47 +65,41 @@
         </div>
       </div>
 
-      <!-- 拓扑图区域 -->
       <div class="graph-container" ref="graphContainer">
         <RelationGraph
           ref="relationGraph"
           :options="graphOptions"
-          :nodes="graphData.nodes"
-          :lines="graphData.lines"
-          :categories="graphData.categories"
-          @node-click="onNodeClick"
-          @line-click="onLineClick"
           class="relation-graph"
+          @on-node-click="onNodeClick"
+          @on-line-click="onLineClick"
         >
-          <!-- 自定义节点模板 -->
           <template #node="{ node, isHover }">
             <div
               class="custom-node"
               :class="[
-                `node-${node.category}`,
+                `node-${node.category || node.meta?.type || 'default'}`,
                 { 'node-hover': isHover },
                 { 'node-selected': node.isSelected }
               ]"
             >
               <div class="node-icon">
-                <span v-if="node.category === 'module'">📁</span>
-                <span v-else-if="node.category === 'class'">🏷️</span>
-                <span v-else-if="node.category === 'function'">⚡</span>
-                <span v-else-if="node.category === 'method'">🔧</span>
+                <span v-if="node.category === 'module' || node.meta?.type === 'module'">📁</span>
+                <span v-else-if="node.category === 'class' || node.meta?.type === 'class'">🏷️</span>
+                <span v-else-if="node.category === 'function' || node.meta?.type === 'function'">⚡</span>
+                <span v-else-if="node.category === 'method' || node.meta?.type === 'method'">🔧</span>
                 <span v-else>📄</span>
               </div>
               <div class="node-content">
-                <div class="node-text">{{ node.text }}</div>
-                <div class="node-meta" v-if="node.meta?.type">
-                  {{ node.meta.type }}
+                <div class="node-text">{{ node.text || node.name }}</div>
+                <div class="node-meta" v-if="node.meta?.type || node.category">
+                  {{ node.meta?.type || node.category }}
                 </div>
               </div>
             </div>
           </template>
         </RelationGraph>
 
-        <!-- 空状态提示 -->
-        <div v-if="graphData.nodes.length === 0" class="empty-state">
+        <div v-if="!hasData" class="empty-state">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mb-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
           </svg>
@@ -119,7 +110,6 @@
         </div>
       </div>
 
-      <!-- 详情面板 -->
       <div
         v-if="selectedNode"
         class="detail-panel"
@@ -136,15 +126,15 @@
         <div class="detail-content">
           <div class="detail-item">
             <span class="detail-label">名称</span>
-            <span class="detail-value">{{ selectedNode.text }}</span>
+            <span class="detail-value">{{ selectedNode.text || selectedNode.name }}</span>
           </div>
           <div class="detail-item">
             <span class="detail-label">类型</span>
             <span
               class="detail-value type-badge"
-              :style="{ backgroundColor: getCategoryColor(selectedNode.category) }"
+              :style="{ backgroundColor: getCategoryColor(selectedNode.category || selectedNode.meta?.type) }"
             >
-              {{ getCategoryName(selectedNode.category) }}
+              {{ getCategoryName(selectedNode.category || selectedNode.meta?.type) }}
             </span>
           </div>
           <div v-if="selectedNode.meta?.line_number" class="detail-item">
@@ -166,19 +156,18 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { RelationGraph } from 'relation-graph/vue3'
-import 'relation-graph/css/style.css'
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import RelationGraph from 'relation-graph/vue3'
+
 import axios from 'axios'
 
-// 响应式数据
 const directoryPath = ref('')
 const analyzing = ref(false)
 const selectedNode = ref(null)
 const graphContainer = ref(null)
 const relationGraph = ref(null)
+const hasData = ref(false)
 
-// 分类数据
 const categories = ref([
   { name: '模块', type: 'module', color: '#67c23a' },
   { name: '类', type: 'class', color: '#409eff' },
@@ -186,43 +175,35 @@ const categories = ref([
   { name: '方法', type: 'method', color: '#f56c6c' }
 ])
 
-// 图表数据
-const graphData = reactive({
-  nodes: [],
-  lines: [],
-  categories: []
-})
-
-// 图表配置
 const graphOptions = ref({
   debug: false,
-  defaultFocusRootNode: true,
-  defaultExpandLevel: 2,
+  defaultFocusRootNode: false,
+  defaultExpandLevel: -1,
   layouts: [
+    {
+      label: '力导向布局',
+      layoutName: 'force',
+      layoutClassName: 'seeks-layout-force',
+      maxNodeCount: 500,
+      isDefault: true
+    },
     {
       label: '中心布局',
       layoutName: 'center',
       layoutClassName: 'seeks-layout-center',
-      maxNodeCount: 50,
-      isDefault: true
+      maxNodeCount: 500
     },
     {
       label: '树状布局',
       layoutName: 'tree',
       layoutClassName: 'seeks-layout-tree',
-      maxNodeCount: 50
-    },
-    {
-      label: '力导向布局',
-      layoutName: 'force',
-      layoutClassName: 'seeks-layout-force',
-      maxNodeCount: 50
+      maxNodeCount: 500
     }
   ],
-  defaultNodeShape: 0,
+  defaultNodeShape: 1,
   defaultNodeWidth: 160,
   defaultNodeHeight: 60,
-  nodePadding: 20,
+  nodePadding: 30,
   lineWidth: 2,
   lineColor: '#4a9eff',
   lineShape: 1,
@@ -231,23 +212,23 @@ const graphOptions = ref({
   showGraphTool: false,
   allowShowLocateRelationLink: true,
   distanceCoef: 1.2,
-  minScale: 0.2,
-  maxScale: 3
+  minScale: 0.1,
+  maxScale: 5,
+  moveToCenterWhenRefresh: false,
+  zoomToFitWhenRefresh: false,
+  useAnimationWhenRefresh: true
 })
 
-// 获取分类颜色
 const getCategoryColor = (type) => {
   const category = categories.value.find(c => c.type === type)
   return category ? category.color : '#888'
 }
 
-// 获取分类名称
 const getCategoryName = (type) => {
   const category = categories.value.find(c => c.type === type)
   return category ? category.name : type
 }
 
-// 分析目录
 const analyzeDirectory = async () => {
   if (!directoryPath.value.trim()) {
     alert('请输入要分析的文件夹路径')
@@ -255,11 +236,11 @@ const analyzeDirectory = async () => {
   }
 
   analyzing.value = true
-  graphData.nodes = []
-  graphData.lines = []
-  graphData.categories = []
+  hasData.value = false
 
   try {
+    console.log('请求路径:', directoryPath.value)
+    
     const response = await axios.get('/api/scan', {
       params: {
         path: directoryPath.value,
@@ -268,76 +249,127 @@ const analyzeDirectory = async () => {
     })
 
     const result = response.data
+    console.log('API响应:', result)
 
     if (result.nodes && result.nodes.length > 0) {
-      // 为节点添加样式
-      graphData.nodes = result.nodes.map(node => ({
+      const nodes = result.nodes.map(node => ({
         ...node,
-        color: getCategoryColor(node.category)
+        color: getCategoryColor(node.category),
+        borderColor: getCategoryColor(node.category)
       }))
 
-      graphData.lines = result.lines
-      graphData.categories = categories.value
+      const lines = result.lines
 
-      // 延迟刷新图表
-      setTimeout(() => {
-        if (relationGraph.value) {
-          relationGraph.value.refresh()
+      let rootId = null
+      const nodeIds = new Set(nodes.map(n => n.id))
+      const lineTargets = new Set(lines.map(l => l.to))
+      
+      for (const node of nodes) {
+        if (!lineTargets.has(node.id)) {
+          rootId = node.id
+          break
         }
-      }, 100)
+      }
+      
+      if (!rootId && nodes.length > 0) {
+        rootId = nodes[0].id
+      }
+
+      const graphData = {
+        rootId: rootId,
+        nodes: nodes,
+        lines: lines
+      }
+
+      console.log('设置图表数据:', graphData)
+
+      await nextTick()
+      
+      if (relationGraph.value) {
+        relationGraph.value.setJsonData(graphData, (graphInstance) => {
+          console.log('图表加载完成')
+          hasData.value = true
+          
+          try {
+            graphInstance.zoomToFit()
+          } catch (e) {
+            console.log('缩放适配失败:', e)
+          }
+        })
+      }
     } else {
-      alert('未找到可分析的Python代码')
+      alert('未找到可分析的Python代码，请检查路径是否正确')
     }
   } catch (error) {
     console.error('分析失败:', error)
-    alert(`分析失败: ${error.message || '未知错误'}`)
+    let errorMsg = '未知错误'
+    if (error.response) {
+      errorMsg = error.response.data?.detail || `HTTP错误: ${error.response.status}`
+    } else if (error.message) {
+      errorMsg = error.message
+    }
+    alert(`分析失败: ${errorMsg}\n\n请确保:\n1. 后端服务已启动 (http://localhost:8000)\n2. 路径是正确的绝对路径\n3. 文件夹包含Python文件`)
   } finally {
     analyzing.value = false
   }
 }
 
-// 节点点击事件
-const onNodeClick = (node) => {
-  selectedNode.value = node
+const onNodeClick = (nodeObject, event) => {
+  console.log('节点点击:', nodeObject)
+  selectedNode.value = nodeObject
 }
 
-// 连线点击事件
-const onLineClick = (line) => {
-  console.log('Line clicked:', line)
+const onLineClick = (lineObject, event) => {
+  console.log('连线点击:', lineObject)
 }
 
-// 重置视图
 const resetView = () => {
   if (relationGraph.value) {
-    relationGraph.value.resetZoom()
+    try {
+      const graphInstance = relationGraph.value.getInstance()
+      if (graphInstance && graphInstance.resetZoom) {
+        graphInstance.resetZoom()
+      } else if (graphInstance && graphInstance.zoomToFit) {
+        graphInstance.zoomToFit()
+      }
+    } catch (e) {
+      console.log('重置视图失败:', e)
+    }
   }
 }
 
-// 放大
 const zoomIn = () => {
   if (relationGraph.value) {
-    const { scale, zoomCenter } = relationGraph.value.getGraphScale()
-    relationGraph.value.setGraphScale({
-      scale: scale * 1.2,
-      zoomCenter: zoomCenter
-    })
+    try {
+      const graphInstance = relationGraph.value.getInstance()
+      if (graphInstance) {
+        const scale = graphInstance.scale || 1
+        graphInstance.scale = scale * 1.2
+        graphInstance.refresh()
+      }
+    } catch (e) {
+      console.log('放大失败:', e)
+    }
   }
 }
 
-// 缩小
 const zoomOut = () => {
   if (relationGraph.value) {
-    const { scale, zoomCenter } = relationGraph.value.getGraphScale()
-    relationGraph.value.setGraphScale({
-      scale: scale * 0.8,
-      zoomCenter: zoomCenter
-    })
+    try {
+      const graphInstance = relationGraph.value.getInstance()
+      if (graphInstance) {
+        const scale = graphInstance.scale || 1
+        graphInstance.scale = scale * 0.8
+        graphInstance.refresh()
+      }
+    } catch (e) {
+      console.log('缩小失败:', e)
+    }
   }
 }
 
 onMounted(() => {
-  // 设置图表分类
-  graphData.categories = categories.value
+  console.log('组件已挂载, relation-graph版本:', RelationGraph)
 })
 </script>
 
@@ -350,7 +382,6 @@ onMounted(() => {
   background-color: #0f172a;
 }
 
-/* 工具栏 */
 .toolbar {
   display: flex;
   justify-content: space-between;
@@ -366,7 +397,7 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   flex: 1;
-  max-width: 800px;
+  max-width: 900px;
 }
 
 .path-input {
@@ -379,6 +410,7 @@ onMounted(() => {
   color: #e2e8f0;
   font-size: 14px;
   transition: all 0.2s ease;
+  font-family: 'Consolas', 'Monaco', monospace;
 }
 
 .path-input:focus {
@@ -439,7 +471,6 @@ onMounted(() => {
   color: #e2e8f0;
 }
 
-/* 主内容区 */
 .main-content {
   display: flex;
   flex: 1;
@@ -447,7 +478,6 @@ onMounted(() => {
   position: relative;
 }
 
-/* 图例面板 */
 .legend-panel {
   width: 180px;
   background-color: #1e293b;
@@ -502,7 +532,6 @@ onMounted(() => {
   color: #94a3b8;
 }
 
-/* 图表容器 */
 .graph-container {
   flex: 1;
   position: relative;
@@ -515,7 +544,6 @@ onMounted(() => {
   height: 100%;
 }
 
-/* 自定义节点样式 */
 .custom-node {
   display: flex;
   align-items: center;
@@ -527,6 +555,7 @@ onMounted(() => {
   cursor: pointer;
   transition: all 0.2s ease;
   min-width: 150px;
+  box-sizing: border-box;
 }
 
 .custom-node.node-hover {
@@ -539,19 +568,22 @@ onMounted(() => {
   border-color: #3b82f6;
 }
 
-/* 不同类型的节点颜色 */
+.custom-node.node-module,
 .custom-node.node-module {
   border-color: #67c23a;
 }
 
+.custom-node.node-class,
 .custom-node.node-class {
   border-color: #409eff;
 }
 
+.custom-node.node-function,
 .custom-node.node-function {
   border-color: #e6a23c;
 }
 
+.custom-node.node-method,
 .custom-node.node-method {
   border-color: #f56c6c;
 }
@@ -583,7 +615,6 @@ onMounted(() => {
   text-transform: capitalize;
 }
 
-/* 空状态 */
 .empty-state {
   position: absolute;
   top: 50%;
@@ -593,9 +624,10 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   text-align: center;
+  z-index: 10;
+  pointer-events: none;
 }
 
-/* 详情面板 */
 .detail-panel {
   width: 0;
   overflow: hidden;
@@ -700,8 +732,18 @@ onMounted(() => {
   overflow-y: auto;
 }
 
-/* 连线动画 - 覆盖relation-graph的默认样式 */
+@keyframes dash-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+:deep(.seeks-bg) {
+  fill: #0f172a !important;
+}
+
 :deep(.seeks-line-inner) {
+  stroke: #4a9eff !important;
   stroke-dasharray: 6, 6;
   animation: dash-flow 1.5s linear infinite;
 }
@@ -712,5 +754,10 @@ onMounted(() => {
   stroke-width: 2;
   stroke-dasharray: 5, 5;
   animation: dash-flow 1s linear infinite;
+}
+
+:deep(.seeks-line-text) {
+  fill: #94a3b8 !important;
+  font-size: 12px;
 }
 </style>
